@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const randomize = require("randomatic");
 const { sendOtpEmail } = require("../utilis/nodeMailer");
+const Course = require("../Model/CourseModel");
 
 // ✅ Generate JWT Token
 const generateToken = (id) => {
@@ -130,4 +131,27 @@ exports.getUserDetails = async (req, res) => {
     console.error("Error fetching user details:", error.message);
     return res.status(500).json({ success: false, message: "Server error" });
   }
+};
+
+// Add this function or modify existing one
+exports.getEducatorCourses = async (req, res) => {
+    try {
+        const educatorId = req.user._id;
+        
+        const courses = await Course.find({ educator: educatorId })
+            .populate('educator', 'name email')
+            .sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            courses
+        });
+    } catch (error) {
+        console.error('Error fetching educator courses:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching courses',
+            error: error.message
+        });
+    }
 };

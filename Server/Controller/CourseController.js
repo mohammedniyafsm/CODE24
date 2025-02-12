@@ -1,60 +1,161 @@
 const Course = require("../Model/CourseModel");
 const Student = require("../Model/StudentModel");
-const cloudinary = require("../utilis/cloudinary");
+const { uploadVideo } = require('../utilis/cloudinary');
 const multer = require("multer");
 const uploadMiddleware = require("../Middleware/uploadMiddleware"); // ✅ No need to call as a function
+const fs = require('fs');
+const path = require('path');
 
 // ✅ Course Video Upload Controller
-exports.uploadCourseWithVideos = async (req, res) => {
+exports.uploadCourse = async (req, res) => {
     try {
-      if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ message: "No videos uploaded." });
-      }
-  
-      const { title, description, category, price, videoTitles } = req.body;
-      const educatorId = req.user._id;
-  
-      // Parse video titles from frontend (comma-separated)
-      const titlesArray = videoTitles.split(",");
-  
-      if (titlesArray.length !== req.files.length) {
-        return res.status(400).json({ message: "Mismatch in number of videos and titles" });
-      }
-  
-      // Map uploaded videos to content array
-      const videoContent = req.files.map((file, index) => ({
-        type: "video",
-        title: titlesArray[index].trim(),
-        url: file.path, // Cloudinary URL
-      }));
-  
-      // Create course
-      const newCourse = new Course({
-        title,
-        description,
-        category,
-        price,
-        educator: educatorId,
-        content: videoContent,
-      });
-  
-      await newCourse.save();
-      return res.status(201).json({ message: "Course created successfully", course: newCourse });
+        // Debug logs
+        console.log('Starting course upload...');
+        console.log('Request user:', req.user);
+        console.log('Request body:', req.body);
+        console.log('Request files:', req.files);
+
+        // Create uploads directory if it doesn't exist
+        const uploadsDir = path.join(__dirname, '../uploads');
+        if (!fs.existsSync(uploadsDir)){
+            fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Please upload at least one video"
+            });
+        }
+
+        const { title, description, category, price, videoTitles } = req.body;
+        
+        // Validate required fields
+        if (!title || !description || !category || !price) {
+            return res.status(400).json({
+                success: false,
+                message: "All fields are required"
+            });
+        }
+
+        const educatorId = req.user._id;
+        console.log('Educator ID:', educatorId);
+
+        // Split video titles and validate
+        const titleArray = videoTitles ? videoTitles.split(',') : [];
+        console.log('Video titles:', titleArray);
+        
+        if (titleArray.length !== req.files.length) {
+            return res.status(400).json({
+                success: false,
+                message: "Number of titles doesn't match number of videos"
+            });
+        }
+
+        // Upload videos to cloudinary
+        console.log('Starting video uploads to Cloudinary...');
+        const videoPromises = req.files.map(async (file, index) => {
+            try {
+                console.log(`Uploading file ${index + 1}:`, file.path);
+                const result = await uploadVideo(file.path);
+                console.log(`Upload result for file ${index + 1}:`, result);
+
+                // Delete the file from local storage after upload
+                if (fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                    console.log(`Deleted local file: ${file.path}`);
+                }
+
+                return {
+                    type: "video",
+                    title: titleArray[index].trim(),
+                    url: result.secure_url,
+                    public_id: result.public_id
+                };
+            } catch (error) {
+                console.error(`Error uploading video ${index + 1}:`, error);
+                // Clean up the file if upload fails
+                if (fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                }
+                throw new Error(`Failed to upload video ${index + 1}: ${error.message}`);
+            }
+        });
+
+        console.log('Waiting for all video uploads to complete...');
+        const uploadedVideos = await Promise.all(videoPromises);
+        console.log('All videos uploaded successfully:', uploadedVideos);
+
+        // Create new course
+        console.log('Creating new course...');
+        const newCourse = new Course({
+            title,
+            description,
+            category,
+            price: Number(price),
+            educator: educatorId,
+            content: uploadedVideos,
+            studentsEnrolled: []
+        });
+
+        console.log('Saving course to database...');
+        await newCourse.save();
+        console.log('Course saved successfully:', newCourse);
+
+        return res.status(201).json({
+            success: true,
+            message: "Course uploaded successfully",
+            course: newCourse
+        });
+
     } catch (error) {
-      console.error("Error uploading videos:", error.message);
-      return res.status(500).json({ success: false, message: "Server error" });
+        console.error("Error in uploadCourse:", error);
+        
+        // Clean up any remaining files
+        if (req.files) {
+            req.files.forEach(file => {
+                if (fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                    console.log(`Cleaned up file: ${file.path}`);
+                }
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Error uploading course",
+            error: error.stack // Include stack trace for debugging
+        });
     }
-  };
-  
+};
 
 // ✅ **2. Get All Courses**
 exports.getAllCourses = async (req, res) => {
   try {
-    const courses = await Course.find().populate("educator", "name email");
-    return res.status(200).json({ courses });
+    const courses = await Course.find()
+      .populate('educator', 'name email')
+      .select('title description price content educator createdAt category');
+
+    if (!courses) {
+      return res.status(404).json({
+        success: false,
+        message: "No courses found"
+      });
+    }
+
+    console.log("Fetched courses:", courses); // For debugging
+
+    return res.status(200).json({
+      success: true,
+      courses: courses,
+      message: "Courses fetched successfully"
+    });
   } catch (error) {
     console.error("Error fetching courses:", error.message);
-    return res.status(500).json({ success: false, message: "Server error" });
+    return res.status(500).json({ 
+      success: false, 
+      message: "Error fetching courses" 
+    });
   }
 };
 

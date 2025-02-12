@@ -11,7 +11,11 @@ const StudentSchema = new mongoose.Schema(
     progress: [
       {
         courseId: { type: mongoose.Schema.Types.ObjectId, ref: "Course" },
-        completion: { type: Number, default: 0 }, // 0-100% progress
+        completed: [{
+          contentId: mongoose.Schema.Types.ObjectId,
+          completedAt: Date
+        }],
+        lastAccessed: Date
       }
     ],
   },
